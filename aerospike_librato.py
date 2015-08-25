@@ -26,7 +26,7 @@ import fcntl
 import subprocess
 import getpass
 import librato
-import citrusleaf
+import vendor.citrusleaf
 
 
 class Pidfile(object):
