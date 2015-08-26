@@ -26,7 +26,7 @@ import fcntl
 import subprocess
 import getpass
 import librato
-import vendor.citrusleaf
+from vendor import citrusleaf
 
 
 class Pidfile(object):
@@ -141,16 +141,17 @@ class Daemon:
         atexit.register(self.delpid)
         pid = str(os.getpid())
         self.pidfile.write(pid)
-        print(self.pidfile)
 
     def delpid(self):
-        os.remove(self.pidfile)
+        try:
+            os.remove(str(self.pidfile))
+        except OSError:
+            pass
 
     def start(self):
         """
         Start the daemon
         """
-        print("Starting")
         # Check for a pidfile to see if the daemon already runs
         if self.pidfile.is_running():
             self.pidfile.unlock()
@@ -300,14 +301,17 @@ parser.add_argument("-d"
 parser.add_argument("-t",
                     "--librato-token",
                     dest="librato_token",
-                    required=True,
                     help="Librato authentication token")
 
 parser.add_argument("-L",
                     "--librato-user",
                     dest="librato_user",
-                    required=True,
                     help="Librato authentication user")
+
+parser.add_argument("-e",
+                    "--environment",
+                    dest="environment",
+                    help="Environment (staging/production)")
 
 args = parser.parse_args()
 
@@ -319,6 +323,11 @@ if args.user is not None:
     if args.password == "prompt":
         args.password = getpass.getpass("Enter Password:")
     password = citrusleaf.hashpassword(args.password)
+
+if args.environment is None:
+    ENVIRONMENT = "development"
+else:
+    ENVIRONMENT = str(args.environment)
 
 # Configurable parameters
 LOGFILE = args.log_file
@@ -336,7 +345,7 @@ CITRUSLEAF_PORT = args.info_port
 CITRUSLEAF_XDR_PORT = args.xdr_port
 CITRUSLEAF_SERVER_ID = socket.gethostname()
 INTERVAL = 30
-FQDN = socket.getfqdn()
+LIBRATO_PREFIX = "aerospike"
 
 
 class LibratoDaemon(Daemon):
@@ -362,14 +371,10 @@ class LibratoDaemon(Daemon):
               time.asctime(time.localtime()))
 
         while True:
-            msg = []
-            now = int(time.time())
             r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER, CITRUSLEAF_PORT,
                                            'statistics', user, password)
-            print(r)
 
             if -1 != r:
-                #lines = []
                 for string in r.split(';'):
                     if string == "":
                         continue
@@ -380,245 +385,193 @@ class LibratoDaemon(Daemon):
                     name, value = string.split('=')
                     value = value.replace('false', "0")
                     value = value.replace('true', "1")
-                    q.add(name, value, source=FQDN)
+                    librato_name = "%s__statistics_%s" % (LIBRATO_PREFIX, name)
+                    q.add(librato_name, value, source=ENVIRONMENT)
 
+            if args.sets:
+                r = citrusleaf.citrusleaf_info(
+                    CITRUSLEAF_SERVER, CITRUSLEAF_PORT, 'sets',
+                    user, password)
+                
+                if -1 != r:
+                    for string in r.split(';'):
+                        if len(string) == 0:
+                            continue
+                        setlist = string.split(':')
+                        namespace = setlist[0]
+                        namespace_name = namespace.split('=')[1]
+                        sets = setlist[1]
+                        sets_name = sets.split('=')[1]
 
+                        for set_tuple in setlist[2:]:
 
-            # if args.sets:
-            #     r = -1
-            #     try:
-            #         r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
-            #                                        CITRUSLEAF_PORT, 'sets',
-            #                                        user, password)
-            #     except:
-            #         pass
-            #     if -1 != r:
-            #         lines = []
-            #         for string in r.split(';'):
-            #             if len(string) == 0:
-            #                 continue
-            #             setlist = string.split(':')
-            #             namespace = setlist[0]
-            #             sets = setlist[1]
-            #             for set_tuple in setlist[2:]:
-            #                 key, value = set_tuple.split('=')
-            #                 lines.append("%s.sets.%s.%s.%s %s %s" % (
-            #                     GRAPHITE_PATH_PREFIX, namespace, sets, key,
-            #                     value, now))
-            #         msg.extend(lines)
-            #
-            # if args.latency:
-            #     r = -1
-            #     if args.latency.startswith('latency:'):
-            #         try:
-            #             r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
-            #                                            CITRUSLEAF_PORT,
-            #                                            args.latency, user,
-            #                                            password)
-            #         except:
-            #             pass
-            #     else:
-            #         try:
-            #             r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
-            #                                            CITRUSLEAF_PORT,
-            #                                            'latency:', user,
-            #                                            password)
-            #         except:
-            #             pass
-            #
-            #     if (-1 != r) and not (r.startswith('error')):
-            #         lines = []
-            #         latency_type = ""
-            #         header = []
-            #         for string in r.split(';'):
-            #             if len(string) == 0:
-            #                 continue
-            #             if len(latency_type) == 0:
-            #                 # Base case
-            #                 latency_type, rest = string.split(':', 1)
-            #                 header = rest.split(',')
-            #             else:
-            #                 val = string.split(',')
-            #                 for i in range(1, len(header)):
-            #                     name = latency_type + "." + header[i]
-            #                     name = name.replace('>', 'over_')
-            #                     name = name.replace('ops/sec', 'ops_per_sec')
-            #                     value = val[i]
-            #                     lines.append("%s.latency.%s %s %s" % (
-            #                         GRAPHITE_PATH_PREFIX, name, value, now))
-            #                 # Reset base case
-            #                 latency_type = ""
-            #                 header = []
-            #         msg.extend(lines)
-            #
-            # if args.namespace:
-            #     r = -1
-            #     try:
-            #         r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
-            #                                        CITRUSLEAF_PORT,
-            #                                        'namespaces', user, password)
-            #     except:
-            #         pass
-            #
-            #     if -1 != r:
-            #         namespaces = filter(None, r.split(';'))
-            #         if len(namespaces) > 0:
-            #             for namespace in namespaces:
-            #                 r = -1
-            #                 try:
-            #                     r = citrusleaf.citrusleaf_info(
-            #                         CITRUSLEAF_SERVER, CITRUSLEAF_PORT,
-            #                         'namespace/' + namespace, user, password)
-            #                 except:
-            #                     pass
-            #                 if -1 != r:
-            #                     lines = []
-            #                     for string in r.split(';'):
-            #                         name, value = string.split('=')
-            #                         value = value.replace('false', "0")
-            #                         value = value.replace('true', "1")
-            #                         lines.append(
-            #                             GRAPHITE_PATH_PREFIX + "."
-            #                             + namespace + ".%s %s %s" % (
-            #                                 name, value, now))
-            #                     msg.extend(lines)
-            #
-            # if args.xdr:
-            #     r = -1
-            #     try:
-            #         r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
-            #                                        CITRUSLEAF_XDR_PORT,
-            #                                        'statistics', user, password)
-            #     except:
-            #         pass
-            #
-            #     if -1 != r:
-            #         lines = []
-            #         for string in r.split(';'):
-            #             if string == "":
-            #                 continue
-            #
-            #             if string.count('=') > 1:
-            #                 continue
-            #
-            #             name, value = string.split('=')
-            #             value = value.replace('false', "0")
-            #             value = value.replace('true', "1")
-            #             lines.append("%s.xdr.%s %s %s" % (
-            #                 GRAPHITE_PATH_PREFIX, name, value, now))
-            #         msg.extend(lines)
-            #
-            #     # Logic to export SIndex Stats to Graphite
-            #     # Since Graphite understands numbers we have used
-            #     # substitutes as below
-            #     #     sync_state --
-            #     #         synced = 1 & need_sync = 0
-            #     #     state --
-            #     #         RW = 1 & WO = 0
-            #
-            # if args.sindex:
-            #     r = -1
-            #     try:
-            #         r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
-            #                                        CITRUSLEAF_PORT, 'sindex',
-            #                                        user, password)
-            #     except:
-            #         pass
-            #     if -1 != r:
-            #         indexes = filter(None, r)
-            #         if len(indexes) > 0:
-            #             lines = []
-            #             for index_line in indexes.split(';'):
-            #                 if len(index_line) > 0:
-            #                     index = dict(item.split("=") for item in
-            #                                  index_line.split(":"))
-            #
-            #                     if index["sync_state"] == "synced":
-            #                         index["sync_state"] = 1
-            #                     elif index["sync_state"] == "need_sync":
-            #                         index["sync_state"] = 0
-            #
-            #                     if index["state"] == "RW":
-            #                         index["state"] = 1
-            #                     elif index["state"] == "WO":
-            #                         index["state"] = 0
-            #
-            #                     lines.append(
-            #                         "%s.sindexes.%s.%s.sync_state %s %s" % (
-            #                             GRAPHITE_PATH_PREFIX, index["ns"],
-            #                             index["indexname"], index["sync_state"],
-            #                             now))
-            #                     lines.append("%s.sindexes.%s.%s.state %s %s" % (
-            #                         GRAPHITE_PATH_PREFIX, index["ns"],
-            #                         index["indexname"], index["state"], now))
-            #
-            #                     r = -1
-            #                     try:
-            #                         r = citrusleaf.citrusleaf_info(
-            #                             CITRUSLEAF_SERVER, CITRUSLEAF_PORT,
-            #                             'sindex/' + index["ns"] + '/' + index[
-            #                                 "indexname"], user, password)
-            #                     except:
-            #                         pass
-            #                     if -1 != r:
-            #                         for string in r.split(';'):
-            #                             name, value = string.split('=')
-            #                             value = value.replace('false', "0")
-            #                             value = value.replace('true', "1")
-            #                             lines.append(
-            #                                 "%s.sindexes.%s.%s.%s %s %s" % (
-            #                                     GRAPHITE_PATH_PREFIX,
-            #                                     index["ns"],
-            #                                     index["indexname"], name, value,
-            #                                     now))
-            #             msg.extend(lines)
+                            key, value = set_tuple.split('=')
+                            librato_name = "%s__sets_%s_%s_%s" % (
+                                LIBRATO_PREFIX, namespace_name, sets_name,
+                                key)
+                            q.add(librato_name, value, source=ENVIRONMENT)
 
-            nmsg = ''
-            # AER-2098 move all non numeric values to numbers
-            # check if the val is a float (graphite uses float)
-            # if not, break down the non-numeric part of value into numeric
-            # this is kind of one way hash but easy to guess
-            # leaving the earlier true/false/sync states the way they were done
-            # as there is no major gain in moving them to the new format
-            for line in msg:
-                fields = line.split()
-                try:
-                    float(fields[1])
-                except ValueError:
-                    val = fields[1]
-                    valstr = ''
-                    for x in val:
-                        try:
-                            int(x)
-                            valstr += str(x)
-                        except ValueError:
-                            # convert [Aa-Zz] into numbers 1-26
-                            # doing abs() so that non alphanumerics are taken
-                            # care of example: /
-                            # ord ('a') + 1 = 96, replacing unnecessary fn call
-                            valstr += str(abs(ord(x.lower()) - 96))
+            if args.latency:
+                if args.latency.startswith('latency:'):
+                    r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
+                                                   CITRUSLEAF_PORT,
+                                                   args.latency, user,
+                                                   password)
+                else:
+                    r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
+                                                   CITRUSLEAF_PORT,
+                                                   'latency:', user,
+                                                   password)
 
-                    fields[1] = valstr
-                line = ''
-                for f in fields:
-                    line += f + ' '
-                nmsg += line + '\n'
+                if (-1 != r) and not (r.startswith('error')):
+                    latency_type = ""
+                    header = []
+                    for string in r.split(';'):
+                        if len(string) == 0:
+                            continue
+                        if len(latency_type) == 0:
+                            # Base case
+                            latency_type, rest = string.split(':', 1)
+                            header = rest.split(',')
+                        else:
+                            val = string.split(',')
+                            for i in range(1, len(header)):
+                                name = latency_type + "." + header[i]
+                                name = name.replace('>', 'over_')
+                                name = name.replace('ops/sec', 'ops_per_sec')
+                                value = val[i]
+                                librato_name = "%s__latency_%s" % (
+                                    LIBRATO_PREFIX, name)
+                                q.add(librato_name, value, source=ENVIRONMENT)
+
+                            # Reset base case
+                            latency_type = ""
+                            header = []
+
+            if args.namespace:
+                r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
+                                               CITRUSLEAF_PORT,
+                                               'namespaces', user, password)
+
+                if -1 != r:
+                    namespaces = filter(None, r.split(';'))
+                    if len(namespaces) > 0:
+                        for namespace in namespaces:
+                            r = citrusleaf.citrusleaf_info(
+                                CITRUSLEAF_SERVER, CITRUSLEAF_PORT,
+                                'namespace/' + namespace, user, password)
+
+                            if -1 != r:
+                                for string in r.split(';'):
+                                    name, value = string.split('=')
+                                    value = value.replace('false', "0")
+                                    value = value.replace('true', "1")
+                                    librato_name = "%s__namespace_%s_%s" % (
+                                        LIBRATO_PREFIX, namespace, name)
+                                    q.add(librato_name, value,
+                                          source=ENVIRONMENT)
+
+            if args.xdr:
+                r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
+                                               CITRUSLEAF_XDR_PORT,
+                                               'statistics', user, password)
+
+                if -1 != r:
+                    for string in r.split(';'):
+                        if string == "":
+                            continue
+
+                        if string.count('=') > 1:
+                            continue
+
+                        name, value = string.split('=')
+                        value = value.replace('false', "0")
+                        value = value.replace('true', "1")
+                        # lines.append("%s.xdr.%s %s %s" % (
+                        #     GRAPHITE_PATH_PREFIX, name, value, now))
+
+                        librato_name = "%s__xdr_%s" % (
+                                        LIBRATO_PREFIX, name)
+                        print "%s: %s" % (librato_name, value)
+                        q.add(librato_name, value, source=ENVIRONMENT)
+
+                # Logic to export SIndex Stats to Graphite
+                # Since Graphite understands numbers we have used
+                # substitutes as below
+                #     sync_state --
+                #         synced = 1 & need_sync = 0
+                #     state --
+                #         RW = 1 & WO = 0
+
+            if args.sindex:
+                pass
+                # r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
+                #                                CITRUSLEAF_PORT, 'sindex',
+                #                                user, password)
+                #
+                # if -1 != r:
+                #     indexes = filter(None, r)
+                #     if len(indexes) > 0:
+                #         lines = []
+                #         for index_line in indexes.split(';'):
+                #             if len(index_line) > 0:
+                #                 index = dict(
+                #                     item.split("=") for item in
+                #                              index_line.split(":"))
+                #
+                #                 if index["sync_state"] == "synced":
+                #                     index["sync_state"] = 1
+                #                 elif index["sync_state"] == "need_sync":
+                #                     index["sync_state"] = 0
+                #
+                #                 if index["state"] == "RW":
+                #                     index["state"] = 1
+                #                 elif index["state"] == "WO":
+                #                     index["state"] = 0
+                #
+                #                 lines.append(
+                #                     "%s.sindexes.%s.%s.sync_state %s %s" % (
+                #                         GRAPHITE_PATH_PREFIX, index["ns"],
+                #                         index["indexname"], index["sync_state"],
+                #                         now))
+                #                 lines.append("%s.sindexes.%s.%s.state %s %s" % (
+                #                     GRAPHITE_PATH_PREFIX, index["ns"],
+                #                     index["indexname"], index["state"], now))
+                #
+                #                 r = -1
+                #                 try:
+                #                     r = citrusleaf.citrusleaf_info(
+                #                         CITRUSLEAF_SERVER, CITRUSLEAF_PORT,
+                #                         'sindex/' + index["ns"] + '/' + index[
+                #                             "indexname"], user, password)
+                #                 except:
+                #                     pass
+                #                 if -1 != r:
+                #                     for string in r.split(';'):
+                #                         name, value = string.split('=')
+                #                         value = value.replace('false', "0")
+                #                         value = value.replace('true', "1")
+                #                         lines.append(
+                #                             "%s.sindexes.%s.%s.%s %s %s" % (
+                #                                 GRAPHITE_PATH_PREFIX,
+                #                                 index["ns"],
+                #                                 index["indexname"], name, value,
+                #                                 now))
 
             try:
                 q.submit()
+
             except:
                 # Once the connection is broken, we need to reconnect
                 print("ERROR: Unable to send to Librato server, "
                       "retrying connection..")
                 sys.stdout.flush()
-                q.close()
                 q = self.connect()
 
             time.sleep(INTERVAL)
 
 
 if __name__ == "__main__":
-    # TODO: move this to config param
     daemon = LibratoDaemon('/tmp/as_librato.pid', LOGFILE)
     if args.start or args.stop or args.restart:
         if args.start:
