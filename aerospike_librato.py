@@ -130,9 +130,9 @@ class Daemon:
         # redirect standard file descriptors
         sys.stdout.flush()
         sys.stderr.flush()
-        si = file(self.stdin, 'r')
-        so = file(self.stdout, 'a+')
-        se = file(self.stderr, 'a+', 0)
+        si = open(self.stdin, 'r')
+        so = open(self.stdout, 'a+')
+        se = open(self.stderr, 'a+', 0)
         os.dup2(si.fileno(), sys.stdin.fileno())
         os.dup2(so.fileno(), sys.stdout.fileno())
         os.dup2(se.fileno(), sys.stderr.fileno())
@@ -308,10 +308,10 @@ parser.add_argument("-L",
                     dest="librato_user",
                     help="Librato authentication user")
 
-parser.add_argument("-e",
-                    "--environment",
-                    dest="environment",
-                    help="Environment (staging/production)")
+parser.add_argument("-N",
+                    "--name-tag",
+                    dest="nametag",
+                    help="Name sent to Librato (default: hostname)")
 
 args = parser.parse_args()
 
@@ -324,10 +324,10 @@ if args.user is not None:
         args.password = getpass.getpass("Enter Password:")
     password = citrusleaf.hashpassword(args.password)
 
-if args.environment is None:
-    ENVIRONMENT = "development"
+if args.nametag is None:
+    NAMETAG = socket.gethostname()
 else:
-    ENVIRONMENT = str(args.environment)
+    NAMETAG = str(args.nametag)
 
 # Configurable parameters
 LOGFILE = args.log_file
@@ -340,10 +340,9 @@ if not args.stop:
         parser.print_help()
         sys.exit(2)
 
-CITRUSLEAF_SERVER = args.base_node
-CITRUSLEAF_PORT = args.info_port
-CITRUSLEAF_XDR_PORT = args.xdr_port
-CITRUSLEAF_SERVER_ID = socket.gethostname()
+AEROSPIKE_SERVER = args.base_node
+AEROSPIKE_PORT = args.info_port
+AEROSPIKE_XDR_PORT = args.xdr_port
 INTERVAL = 30
 LIBRATO_PREFIX = "aerospike"
 
@@ -371,7 +370,7 @@ class LibratoDaemon(Daemon):
               time.asctime(time.localtime()))
 
         while True:
-            r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER, CITRUSLEAF_PORT,
+            r = citrusleaf.citrusleaf_info(AEROSPIKE_SERVER, AEROSPIKE_PORT,
                                            'statistics', user, password)
 
             if -1 != r:
@@ -386,11 +385,11 @@ class LibratoDaemon(Daemon):
                     value = value.replace('false', "0")
                     value = value.replace('true', "1")
                     librato_name = "%s__statistics_%s" % (LIBRATO_PREFIX, name)
-                    q.add(librato_name, value, source=ENVIRONMENT)
+                    q.add(librato_name, value, source=NAMETAG)
 
             if args.sets:
                 r = citrusleaf.citrusleaf_info(
-                    CITRUSLEAF_SERVER, CITRUSLEAF_PORT, 'sets',
+                    AEROSPIKE_SERVER, AEROSPIKE_PORT, 'sets',
                     user, password)
                 
                 if -1 != r:
@@ -409,17 +408,17 @@ class LibratoDaemon(Daemon):
                             librato_name = "%s__sets_%s_%s_%s" % (
                                 LIBRATO_PREFIX, namespace_name, sets_name,
                                 key)
-                            q.add(librato_name, value, source=ENVIRONMENT)
+                            q.add(librato_name, value, source=NAMETAG)
 
             if args.latency:
                 if args.latency.startswith('latency:'):
-                    r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
-                                                   CITRUSLEAF_PORT,
+                    r = citrusleaf.citrusleaf_info(AEROSPIKE_SERVER,
+                                                   AEROSPIKE_PORT,
                                                    args.latency, user,
                                                    password)
                 else:
-                    r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
-                                                   CITRUSLEAF_PORT,
+                    r = citrusleaf.citrusleaf_info(AEROSPIKE_SERVER,
+                                                   AEROSPIKE_PORT,
                                                    'latency:', user,
                                                    password)
 
@@ -442,15 +441,15 @@ class LibratoDaemon(Daemon):
                                 value = val[i]
                                 librato_name = "%s__latency_%s" % (
                                     LIBRATO_PREFIX, name)
-                                q.add(librato_name, value, source=ENVIRONMENT)
+                                q.add(librato_name, value, source=NAMETAG)
 
                             # Reset base case
                             latency_type = ""
                             header = []
 
             if args.namespace:
-                r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
-                                               CITRUSLEAF_PORT,
+                r = citrusleaf.citrusleaf_info(AEROSPIKE_SERVER,
+                                               AEROSPIKE_PORT,
                                                'namespaces', user, password)
 
                 if -1 != r:
@@ -458,7 +457,7 @@ class LibratoDaemon(Daemon):
                     if len(namespaces) > 0:
                         for namespace in namespaces:
                             r = citrusleaf.citrusleaf_info(
-                                CITRUSLEAF_SERVER, CITRUSLEAF_PORT,
+                                AEROSPIKE_SERVER, AEROSPIKE_PORT,
                                 'namespace/' + namespace, user, password)
 
                             if -1 != r:
@@ -469,11 +468,11 @@ class LibratoDaemon(Daemon):
                                     librato_name = "%s__namespace_%s_%s" % (
                                         LIBRATO_PREFIX, namespace, name)
                                     q.add(librato_name, value,
-                                          source=ENVIRONMENT)
+                                          source=NAMETAG)
 
             if args.xdr:
-                r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
-                                               CITRUSLEAF_XDR_PORT,
+                r = citrusleaf.citrusleaf_info(AEROSPIKE_SERVER,
+                                               AEROSPIKE_XDR_PORT,
                                                'statistics', user, password)
 
                 if -1 != r:
@@ -492,8 +491,8 @@ class LibratoDaemon(Daemon):
 
                         librato_name = "%s__xdr_%s" % (
                                         LIBRATO_PREFIX, name)
-                        print "%s: %s" % (librato_name, value)
-                        q.add(librato_name, value, source=ENVIRONMENT)
+                        print("%s: %s" % (librato_name, value))
+                        q.add(librato_name, value, source=NAMETAG)
 
                 # Logic to export SIndex Stats to Graphite
                 # Since Graphite understands numbers we have used
@@ -506,7 +505,7 @@ class LibratoDaemon(Daemon):
             if args.sindex:
                 pass
                 # r = citrusleaf.citrusleaf_info(CITRUSLEAF_SERVER,
-                #                                CITRUSLEAF_PORT, 'sindex',
+                #                                AEROSPIKE_PORT, 'sindex',
                 #                                user, password)
                 #
                 # if -1 != r:
@@ -541,7 +540,7 @@ class LibratoDaemon(Daemon):
                 #                 r = -1
                 #                 try:
                 #                     r = citrusleaf.citrusleaf_info(
-                #                         CITRUSLEAF_SERVER, CITRUSLEAF_PORT,
+                #                         CITRUSLEAF_SERVER, AEROSPIKE_PORT,
                 #                         'sindex/' + index["ns"] + '/' + index[
                 #                             "indexname"], user, password)
                 #                 except:
