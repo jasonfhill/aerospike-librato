@@ -29,7 +29,7 @@ except IOError:
     print('Unable to open configuration file (default-config.ini)')
     sys.exit(1)
 
-config.read(['aerospike-librato.ini',
+config.read(['/etc/aerospike-librato.ini',
              os.path.expanduser('~/.aerospike-librato.ini')])
 
 aerospike_authentication = config.getboolean('main', 'aerospike_authentication')
