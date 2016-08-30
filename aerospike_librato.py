@@ -20,6 +20,8 @@ import sys
 import os
 import time
 import librato
+import re
+
 from vendor import citrusleaf
 
 config = ConfigParser.ConfigParser()
@@ -141,11 +143,14 @@ class Monitor:
                     latency_type = ""
                     header = []
                     for string in r.split(';'):
-                        if len(string) == 0:
+                        if len(string) == 0 or string.startswith("error"):
                             continue
                         if len(latency_type) == 0:
                             # Base case
                             latency_type, rest = string.split(':', 1)
+                            match = re.match('{(.*)}', latency_type)
+                            latency_type = re.sub('{.*}-', '', latency_type)
+                            latency_type = match.groups()[0]+'.'+latency_type
                             header = rest.split(',')
                         else:
                             val = string.split(',')
@@ -177,8 +182,14 @@ class Monitor:
                             if -1 != r:
                                 for string in r.split(';'):
                                     name, value = string.split('=')
+                                    name = re.sub('{.*}-', '', name)
                                     value = value.replace('false', "0")
                                     value = value.replace('true', "1")
+                                    value = value.replace('INACTIVE', "0")
+                                    value = value.replace('CLUSTER_DOWN', "1")
+                                    value = value.replace('CLUSTER_UP', "2")
+                                    value = value.replace('WINDOW_SHIPPER', "3")
+
                                     librato_name = "%s__namespace_%s_%s" % (
                                         librato_prefix, namespace, name)
                                     q.add(librato_name, value,
@@ -204,7 +215,16 @@ class Monitor:
 
             try:
                 q.submit()
+            except librato.exceptions.Unauthorized:
+                print("Librato ERROR: Unauthorized. "
+                      "Please verify user and token.")
+                sys.exit(1)
+            except librato.exceptions.BadRequest:
+                print("Librato ERROR: Bad request.")
+                sys.exit(1)
             except:
+                print "Unexpected error:", sys.exc_info()[0]
+
                 # Once the connection is broken, we need to reconnect
                 print("ERROR: Unable to send to Librato server, "
                       "retrying connection..")
